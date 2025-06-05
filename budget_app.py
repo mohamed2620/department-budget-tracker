@@ -11,35 +11,26 @@ USERS = {
     "Chad": st.secrets["bcrypt_hashes"]["Chad"].encode()
 }
 
-
-MAX_LOGIN_ATTEMPTS = 5  # Block after 5 failed tries
+MAX_LOGIN_ATTEMPTS = 5
 
 def verify_password(username: str, password: str) -> bool:
-    """
-    Returns True if 'username' is in USERS and 'password' matches the stored bcrypt hash.
-    """
-    # Grab the stored hash (bytes)
     stored_hash = USERS.get(username)
     if stored_hash is None:
         return False
-    # bcrypt.checkpw() returns True if password matches
     return bcrypt.checkpw(password.encode(), stored_hash)
 
 st.set_page_config(page_title="Department Budget Tracker", page_icon="💰", layout="wide")
 st.title("💰 Department Budget Tracker")
 
-# Initialize session_state for login tracking
 if "logged" not in st.session_state:
     st.session_state.logged = False
 if "login_attempts" not in st.session_state:
     st.session_state.login_attempts = 0
 
-# If not logged in, show login form
 if not st.session_state.logged:
     st.markdown("## 🔒 Please log in to continue")
-    # If they've already failed too many times, block them for this session
     if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
-        st.error("🚫 Too many failed login attempts. Please restart the app or wait until session resets.")
+        st.error("🚫 Too many failed login attempts. Restart the app to try again.")
         st.stop()
 
     with st.form("login_form", clear_on_submit=False):
@@ -55,6 +46,7 @@ if not st.session_state.logged:
                 attempts_left = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
                 st.error(f"❌ Wrong credentials. Attempts left: {attempts_left}")
     st.stop()
+
 
 # ---------- 2. INITIALIZE SESSION DATAFRAME ----------
 COLS = [
