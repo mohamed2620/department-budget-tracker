@@ -14,7 +14,6 @@ def load_data():
         df = pd.read_csv(DATA_FILE, parse_dates=["Date"])
         return df
     else:
-        # Same columns you’ve been using
         cols = [
             "Date", "Vendor", "Description", "Location", "Recovery Type",
             "Charged Amount", "Reimbursed Amount", "Invoice #", "CHQ REQ #", "Out of Pocket?"
@@ -23,13 +22,12 @@ def load_data():
 
 def save_data(df: pd.DataFrame):
     """Write the DataFrame out to data.csv (overwriting)."""
-    # Make sure Date is saved in YYYY-MM-DD format
     df_to_save = df.copy()
     df_to_save["Date"] = df_to_save["Date"].dt.strftime("%Y-%m-%d")
     df_to_save.to_csv(DATA_FILE, index=False)
 
+
 # ---------- 1. LOGIN & RATE LIMITING ----------
-# Pull bcrypt hashes from Streamlit secrets (as before):
 USERS = {
     "Chad": st.secrets["bcrypt_hashes"]["Chad"].encode()
 }
@@ -41,16 +39,14 @@ def verify_password(username: str, password: str) -> bool:
         return False
     return bcrypt.checkpw(password.encode(), hashed)
 
-st.set_page_config(page_title="Budget Tracker", page_icon="💰", layout="wide")
+st.set_page_config(page_title="Department Budget Tracker", page_icon="💰", layout="wide")
 st.title("💰 Department Budget Tracker")
 
-# Initialize login flags
 if "logged" not in st.session_state:
     st.session_state.logged = False
 if "login_attempts" not in st.session_state:
     st.session_state.login_attempts = 0
 
-# Show login form if not authenticated
 if not st.session_state.logged:
     st.markdown("## 🔒 Please log in to continue")
     if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
@@ -72,19 +68,16 @@ if not st.session_state.logged:
     st.stop()
 
 # ---------- 2. LOAD OR INITIALIZE THE DATAFRAME ----------
-# We store all rows in data.csv on disk for persistence.
 if "df" not in st.session_state:
     df_initial = load_data()
-    # Ensure “Date” column is datetime type
     if not df_initial.empty:
         df_initial["Date"] = pd.to_datetime(df_initial["Date"])
     st.session_state.df = df_initial
 
-# ---------- 3. TOTAL BUDGET INPUT ----------
-st.markdown("### Budget Settings")
-budget_total = st.number_input(
-    "Total budget ($)", value=10000.0, step=100.0, format="%.2f"
-)
+# ---------- 3. HARD-CODED TOTAL BUDGET ----------
+# Lock the budget so it never changes in the UI:
+budget_total = 10000.0
+st.markdown(f"### Budget: **${budget_total:,.2f}**  *(fixed)*")
 st.markdown("---\n")
 
 # ---------- 4. ADD ENTRY FORM ----------
@@ -118,10 +111,8 @@ with st.form("add_row", clear_on_submit=True):
             "Out of Pocket?": oop,
         }])
         st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
-        # Immediately save to CSV
         save_data(st.session_state.df)
         st.success("✅ Row added and saved.")
-
 st.markdown("---\n")
 
 # ---------- 5. DELETE ENTRY (and re-save) ----------
@@ -139,7 +130,6 @@ with st.expander("🗑 Delete an entry"):
             drop_idx = choices[option]
             df_live.drop(index=drop_idx, inplace=True)
             df_live.reset_index(drop=True, inplace=True)
-            # Save after deletion
             save_data(df_live)
             st.success("✅ Row deleted and saved.")
 st.markdown("---\n")
