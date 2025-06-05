@@ -6,12 +6,11 @@ from io import BytesIO
 
 # ---------- 1. LOGIN & RATE LIMITING ----------
 # Pre-generated bcrypt hashes (cost=10):
-#   • boss1 / password
-#   • admin / 123
+
 USERS = {
-    "boss1": b"$2b$10$TfhQnHq/FQaCDSAgjZUkq.hVfTBadB6lDkcjaZh2OPtjZC/QWSi1K",
-    "admin": b"$2b$10$66vXAGt1vsIkBMwSkM.TA.nlie7CJHj7ate.MGluP5WPfWHPkUscC",
+    "Chad": st.secrets["bcrypt_hashes"]["Chad"].encode()
 }
+
 
 MAX_LOGIN_ATTEMPTS = 5  # Block after 5 failed tries
 
