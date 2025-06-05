@@ -40,7 +40,7 @@ def verify_password(username: str, password: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed)
 
 st.set_page_config(page_title="Department Budget Tracker", page_icon="💰", layout="wide")
-st.title("💰 Department Budget Tracker")
+st.title("EMCO Budget Tracker")
 
 if "logged" not in st.session_state:
     st.session_state.logged = False
@@ -76,7 +76,7 @@ if "df" not in st.session_state:
 
 # ---------- 3. HARD-CODED TOTAL BUDGET ----------
 # Lock the budget so it never changes in the UI:
-budget_total = 10000.0
+budget_total = 400000.0
 st.markdown(f"### Budget: **${budget_total:,.2f}**  *(fixed)*")
 st.markdown("---\n")
 
@@ -149,9 +149,9 @@ remaining    = budget_total - spent_total
 
 st.markdown("### 📊 Budget Summary")
 colA, colB, colC = st.columns(3)
-colA.metric("Total budget",    f"${budget_total:,.2f}")
-colB.metric("Spent so far",    f"${spent_total:,.2f}")
-colC.metric("Remaining budget", f"${remaining:,.2f}")
+colA.metric("Total Balance",    f"${budget_total:,.2f}")
+colB.metric("Amount Spent",    f"${spent_total:,.2f}")
+colC.metric("Remaining Balance", f"${remaining:,.2f}")
 st.markdown("---\n")
 
 # ---------- 8. STYLED TABLE ----------
