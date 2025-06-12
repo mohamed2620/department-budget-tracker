@@ -1,88 +1,127 @@
+# ── 0. Page config MUST come before any other st.* call ────────────────────
 import streamlit as st
+st.set_page_config(
+    page_title="EMCO Budget Tracker",
+    page_icon="💰",
+    layout="wide",
+)
+
+# ── 1. Standard imports ───────────────────────────────────────────────────
 import pandas as pd
 import bcrypt
-import os
 from datetime import datetime
 from io import BytesIO
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
-# ---------- 0. CONFIGURE PERSISTENCE ----------
-DATA_FILE = "data.csv"
+# ── 2. Database connection ─────────────────────────────────────────────────
+ENGINE = create_engine(
+    st.secrets["supabase"]["pooler"],  # Session-Pooler URL
+    pool_pre_ping=True,
+)
 
-def load_data():
-    """If data.csv exists, load it; otherwise return an empty DataFrame."""
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE, parse_dates=["Date"])
-        return df
-    else:
-        cols = [
-            "Date", "Vendor", "Description", "Location", "Recovery Type",
-            "Charged Amount", "Reimbursed Amount", "Invoice #", "CHQ REQ #", "Out of Pocket?"
-        ]
-        return pd.DataFrame(columns=cols)
-
-def save_data(df: pd.DataFrame):
-    """Write the DataFrame out to data.csv (overwriting)."""
-    df_to_save = df.copy()
-    df_to_save["Date"] = df_to_save["Date"].dt.strftime("%Y-%m-%d")
-    df_to_save.to_csv(DATA_FILE, index=False)
-
-
-# ---------- 1. LOGIN & RATE LIMITING ----------
-USERS = {
-    "Chad": st.secrets["bcrypt_hashes"]["Chad"].encode()
+# ── 3. Column definitions ──────────────────────────────────────────────────
+RAW = [
+    "id","date","vendor","description","location","recovery_type",
+    "charged_amount","reimbursed_amount","invoice","chq_req","out_of_pocket",
+]
+PRETTY = {
+    "date":"Date","vendor":"Vendor","description":"Description",
+    "location":"Location","recovery_type":"Recovery Type",
+    "charged_amount":"Charged Amount","reimbursed_amount":"Reimbursed Amount",
+    "invoice":"Invoice #","chq_req":"CHQ REQ #","out_of_pocket":"Out of Pocket?",
 }
-MAX_LOGIN_ATTEMPTS = 5
 
-def verify_password(username: str, password: str) -> bool:
-    hashed = USERS.get(username)
-    if hashed is None:
-        return False
-    return bcrypt.checkpw(password.encode(), hashed)
+# ── 4. Helpers ─────────────────────────────────────────────────────────────
+def _clean_cols(cols: pd.Index) -> pd.Index:
+    return (
+        cols.str.replace(r"[\u200B-\u200D\uFEFF]", "", regex=True)
+            .str.strip().str.lower().str.replace(" ", "_")
+    )
 
-st.set_page_config(page_title="Department Budget Tracker", page_icon="💰", layout="wide")
-st.title("EMCO Budget Tracker")
+def load_data() -> pd.DataFrame:
+    """Load & normalise the full expenses table."""
+    try:
+        df = pd.read_sql("SELECT * FROM expenses ORDER BY id", ENGINE,
+                         parse_dates=["date"])
+    except SQLAlchemyError as e:
+        st.error(f"🚫 Database error: {e}")
+        return pd.DataFrame(columns=RAW)
 
-if "logged" not in st.session_state:
-    st.session_state.logged = False
-if "login_attempts" not in st.session_state:
-    st.session_state.login_attempts = 0
+    # Normalise column names
+    df.columns = _clean_cols(df.columns)
+
+    # Ensure every RAW column exists
+    for col in RAW:
+        if col not in df.columns:
+            df[col] = False if col=="out_of_pocket" else pd.NA
+
+    # Coerce dtypes
+    df["out_of_pocket"]     = df["out_of_pocket"].fillna(False).astype(bool)
+    df["charged_amount"]    = pd.to_numeric(df["charged_amount"], errors="coerce").fillna(0.0)
+    df["reimbursed_amount"] = pd.to_numeric(df["reimbursed_amount"], errors="coerce").fillna(0.0)
+
+    return df[RAW]
+
+def save_row(data: dict) -> None:
+    sql = text("""
+        INSERT INTO expenses
+        (date,vendor,description,location,recovery_type,
+         charged_amount,reimbursed_amount,invoice,chq_req,out_of_pocket)
+        VALUES
+        (:date,:vendor,:description,:location,:recovery_type,
+         :charged_amount,:reimbursed_amount,:invoice,:chq_req,:out_of_pocket)
+    """)
+    with ENGINE.begin() as conn:
+        conn.execute(sql, data)
+
+def delete_row(rid: int) -> None:
+    with ENGINE.begin() as conn:
+        conn.execute(text("DELETE FROM expenses WHERE id = :rid"), {"rid": rid})
+
+def prettify(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns=PRETTY, errors="ignore").drop(columns="id", errors="ignore")
+
+def to_xlsx(df: pd.DataFrame) -> bytes:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="Expenses")
+    return buf.getvalue()
+
+# ── 5. Simple login ────────────────────────────────────────────────────────
+USERS = {"Chad": st.secrets["bcrypt_hashes"]["Chad"].encode()}
+def authenticate(user: str, pwd: str) -> bool:
+    h = USERS.get(user)
+    return bool(h and bcrypt.checkpw(pwd.encode(), h))
+
+if "logged" not in st.session_state: st.session_state.logged = False
+if "tries"  not in st.session_state: st.session_state.tries  = 0
 
 if not st.session_state.logged:
-    st.markdown("## 🔒 Please log in to continue")
-    if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
-        st.error("🚫 Too many failed login attempts. Restart the app to retry.")
-        st.stop()
-
-    with st.form("login_form", clear_on_submit=False):
+    if st.session_state.tries >= 5:
+        st.error("Too many failed logins. Restart the app."); st.stop()
+    with st.form("login", clear_on_submit=True):
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Log In")
-        if submitted:
-            if verify_password(u, p):
+        if st.form_submit_button("Log in"):
+            if authenticate(u, p):
                 st.session_state.logged = True
-                st.success(f"✅ Logged in as '{u}'.")
             else:
-                st.session_state.login_attempts += 1
-                left = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
-                st.error(f"❌ Wrong credentials. Attempts left: {left}")
+                st.session_state.tries += 1
+                st.error(f"Wrong credentials. {5 - st.session_state.tries} tries left.")
     st.stop()
 
-# ---------- 2. LOAD OR INITIALIZE THE DATAFRAME ----------
-if "df" not in st.session_state:
-    df_initial = load_data()
-    if not df_initial.empty:
-        df_initial["Date"] = pd.to_datetime(df_initial["Date"])
-    st.session_state.df = df_initial
+# ── 6. Title & load fresh data ─────────────────────────────────────────────
+st.title("EMCO Budget Tracker")
+df = load_data()
 
-# ---------- 3. HARD-CODED TOTAL BUDGET ----------
-# Lock the budget so it never changes in the UI:
-budget_total = 400000.0
-st.markdown(f"### Budget: **${budget_total:,.2f}**  *(fixed)*")
-st.markdown("---\n")
+# ── 7. Budget header ──────────────────────────────────────────────────────
+BUDGET = 400_000.0
+st.markdown(f"### Budget: **${BUDGET:,.2f}** *(fixed)*")
+st.markdown("---")
 
-# ---------- 4. ADD ENTRY FORM ----------
-st.markdown("### ➕ Add a New Expense")
-with st.form("add_row", clear_on_submit=True):
+# ── 8. Add / Update expense ───────────────────────────────────────────────
+with st.form("add", clear_on_submit=True):
     c1, c2 = st.columns(2)
     with c1:
         d   = st.date_input("Date", value=datetime.today())
@@ -92,99 +131,70 @@ with st.form("add_row", clear_on_submit=True):
         rty = st.text_input("Recovery Type")
     with c2:
         amt   = st.number_input("Charged Amount ($)", min_value=0.0, format="%.2f")
-        reimb = (amt / 1.13) * 1.0341
+        reimb = amt
         st.write(f"Reimbursed (auto): **${reimb:,.2f}**")
         inv = st.text_input("Invoice #")
         chq = st.text_input("CHQ REQ #")
         oop = st.checkbox("❌ Out of Pocket?")
-    if st.form_submit_button("Add / Update"):
-        new_row = pd.DataFrame([{
-            "Date": pd.to_datetime(d),
-            "Vendor": ven,
-            "Description": des,
-            "Location": loc,
-            "Recovery Type": rty,
-            "Charged Amount": amt,
-            "Reimbursed Amount": reimb,
-            "Invoice #": inv,
-            "CHQ REQ #": chq,
-            "Out of Pocket?": oop,
-        }])
-        st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
-        save_data(st.session_state.df)
-        st.success("✅ Row added and saved.")
-st.markdown("---\n")
+    if st.form_submit_button("Save"):
+        save_row({
+            "date": pd.to_datetime(d),
+            "vendor": ven,
+            "description": des,
+            "location": loc,
+            "recovery_type": rty,
+            "charged_amount": amt,
+            "reimbursed_amount": reimb,
+            "invoice": inv,
+            "chq_req": chq,
+            "out_of_pocket": oop,
+        })
+        st.success("✅ Saved! Refreshing data…")
 
-# ---------- 5. DELETE ENTRY (and re-save) ----------
+st.markdown("---")
+
+# ── 9. Delete entry ────────────────────────────────────────────────────────
 with st.expander("🗑 Delete an entry"):
-    df_live = st.session_state.df
-    if df_live.empty:
-        st.info("No rows to delete.")
+    if df.empty:
+        st.info("No rows in database.")
     else:
-        choices = {
-            f"{idx} | {row['Vendor']} | {row['Date'].date()}": idx
-            for idx, row in df_live.iterrows()
-        }
-        option = st.selectbox("Pick a row to delete", list(choices.keys()))
-        if st.button("Delete selected row"):
-            drop_idx = choices[option]
-            df_live.drop(index=drop_idx, inplace=True)
-            df_live.reset_index(drop=True, inplace=True)
-            save_data(df_live)
-            st.success("✅ Row deleted and saved.")
-st.markdown("---\n")
+        choices = {f"{r.vendor} | {r.date.date()} | ID={r.id}": r.id for r in df.itertuples()}
+        sel     = st.selectbox("Pick a row", list(choices.keys()))
+        if st.button("Delete"):
+            delete_row(choices[sel])
+            st.success("✅ Deleted! Refreshing data…")
 
-# ---------- 6. REFRESH COPY AFTER ANY DELETES OR ADDS ----------
-df = st.session_state.df.copy()
+st.markdown("---")
 
-# ---------- 7. SUMMARY CALCULATIONS ----------
-spent_oop = df[df["Out of Pocket?"] == True]["Charged Amount"].sum()
-spent_diff = (
-    df[df["Out of Pocket?"] == False]
-      .eval("`Charged Amount` - `Reimbursed Amount`")
-      .sum()
-)
-spent_total = spent_oop + spent_diff
-remaining    = budget_total - spent_total
+# ── 10. Budget summary ─────────────────────────────────────────────────────
+mask       = df["out_of_pocket"]
+spent_oop  = df.loc[mask,  "charged_amount"].sum()
+spent_diff = (df.loc[~mask, "charged_amount"] - df.loc[~mask, "reimbursed_amount"]).sum()
+spent_tot  = spent_oop + spent_diff
+remaining  = BUDGET - spent_tot
 
-st.markdown("### 📊 Budget Summary")
-colA, colB, colC = st.columns(3)
-colA.metric("Total Balance",    f"${budget_total:,.2f}")
-colB.metric("Amount Spent",    f"${spent_total:,.2f}")
-colC.metric("Remaining Balance", f"${remaining:,.2f}")
-st.markdown("---\n")
+c1, c2, c3 = st.columns(3)
+c1.metric("Total Budget", f"${BUDGET:,.2f}")
+c2.metric("Amount Spent", f"${spent_tot:,.2f}")
+c3.metric("Remaining",    f"${remaining:,.2f}")
+st.markdown("---")
 
-# ---------- 8. STYLED TABLE ----------
-def style_row(r):
-    return ["color: red" if r["Out of Pocket?"] else "color: white"] * len(r)
-
-st.markdown("### 📋 Current Expenses")
+# ── 11. Table & downloads ─────────────────────────────────────────────────
+disp = prettify(df)
 st.dataframe(
-    df.style.apply(style_row, axis=1),
-    use_container_width=True,
-    height=420
+    disp.style.apply(lambda r: ["color:red" if r["Out of Pocket?"] else "" ]*len(r), axis=1),
+    use_container_width=True, height=420)
+
+colA, colB = st.columns(2)
+colA.download_button(
+    "⬇️ Reimbursed-only",
+    to_xlsx(prettify(df.loc[~mask])),
+    "Reimbursed_Expenses.xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
-# ---------- 9. DOWNLOAD BUTTONS ----------
-def to_xlsx(frame: pd.DataFrame) -> bytes:
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        frame.to_excel(writer, index=False, sheet_name="Expenses")
-    return buffer.getvalue()
-
-reimb_only = df[df["Out of Pocket?"] == False]
-oop_only   = df[df["Out of Pocket?"] == True]
-
-d1, d2 = st.columns(2)
-d1.download_button(
-    "⬇️ Reimbursed-only sheet",
-    data=to_xlsx(reimb_only),
-    file_name="Reimbursed_Expenses.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-d2.download_button(
-    "⬇️ Out-of-Pocket-only sheet",
-    data=to_xlsx(oop_only),
-    file_name="OutOfPocket_Expenses.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+colB.download_button(
+    "⬇️ Out-of-Pocket-only",
+    to_xlsx(prettify(df.loc[mask])),
+    "OutOfPocket_Expenses.xlsx",
+    "application/vnd.openxmlformats-officedocument-spreadsheetml.sheet"
 )
