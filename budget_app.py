@@ -164,7 +164,6 @@ with st.form("add", clear_on_submit=True):
             "chq_req": chq,
             "out_of_pocket": oop,
         })
-        st.experimental_rerun()
 
 st.markdown("---")
 
@@ -180,7 +179,6 @@ with st.expander("🗑 Delete an entry"):
         sel = st.selectbox("Pick a row", list(choices.keys()))
         if st.button("Delete"):
             delete_row(choices[sel])
-            st.experimental_rerun()
 
 st.markdown("---")
 
